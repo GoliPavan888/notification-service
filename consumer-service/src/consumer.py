@@ -3,7 +3,6 @@ import os
 import json
 import time
 
-# SQS client (LocalStack compatible)
 sqs_client = boto3.client(
     "sqs",
     endpoint_url=os.getenv("AWS_ENDPOINT_URL"),
@@ -14,8 +13,21 @@ sqs_client = boto3.client(
 
 SQS_QUEUE_URL = os.getenv("SQS_QUEUE_URL")
 
-# Simple in-memory idempotency store
 processed_message_ids = set()
+
+
+def wait_for_queue():
+    while True:
+        try:
+            sqs_client.get_queue_attributes(
+                QueueUrl=SQS_QUEUE_URL,
+                AttributeNames=["QueueArn"]
+            )
+            print("SQS queue is available")
+            return
+        except Exception:
+            print("Waiting for SQS queue...")
+            time.sleep(3)
 
 
 def process_message(message_id: str, body: str):
@@ -23,7 +35,6 @@ def process_message(message_id: str, body: str):
         print(f"[IDEMPOTENT] Duplicate message ignored: {message_id}")
         return
 
-    # Simulate sending notification
     print(f"[PROCESSING] Message ID: {message_id}")
     print(body)
     time.sleep(1)
@@ -33,7 +44,8 @@ def process_message(message_id: str, body: str):
 
 
 def consume_messages():
-    print("Consumer started. Waiting for messages...")
+    print("Consumer started. Waiting for queue...")
+    wait_for_queue()
 
     while True:
         response = sqs_client.receive_message(
@@ -46,14 +58,12 @@ def consume_messages():
 
         for msg in messages:
             try:
-                # SNS message is wrapped inside SQS
                 sns_envelope = json.loads(msg["Body"])
                 message_body = sns_envelope["Message"]
                 message_id = msg["MessageId"]
 
                 process_message(message_id, message_body)
 
-                # Delete only after successful processing
                 sqs_client.delete_message(
                     QueueUrl=SQS_QUEUE_URL,
                     ReceiptHandle=msg["ReceiptHandle"],
@@ -61,7 +71,6 @@ def consume_messages():
 
             except Exception as e:
                 print(f"[ERROR] Processing failed: {e}")
-                # Message NOT deleted → retried → DLQ after maxReceiveCount
 
         time.sleep(2)
 
